@@ -1,35 +1,691 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#111827">
-<title>Visitor QR — Laptop Scanner</title>
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-<style>
-:root{color-scheme:light;--ink:#111827;--muted:#64748b;--blue:#1d4ed8}*{box-sizing:border-box}body{margin:0;padding:24px;background:#f1f5f9;color:var(--ink);font:16px/1.45 Arial,sans-serif}.wrap{max-width:760px;margin:20px auto;background:#fff;padding:26px;border-radius:18px;box-shadow:0 8px 30px #0f172a12}h1{margin:0 0 6px;font-size:27px}.muted{color:var(--muted)}label{display:block;margin:16px 0 6px;font-weight:700}input,select{width:100%;padding:13px;border:1px solid #cbd5e1;border-radius:9px;font-size:16px}button{border:0;border-radius:9px;padding:13px 17px;background:var(--blue);color:#fff;font-size:15px;font-weight:700;cursor:pointer}button.secondary{background:#334155}button:disabled{opacity:.55;cursor:wait}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.actions button{flex:1;min-width:150px}.hidden{display:none!important}#reader{width:100%;max-width:620px;margin:18px auto}#reader video{border-radius:12px}.panel{margin-top:18px;padding:18px;border-radius:13px}.valid{background:#dcfce7;color:#14532d}.duplicate{background:#fef3c7;color:#78350f}.invalid{background:#fee2e2;color:#7f1d1d}.error{background:#e2e8f0;color:#1e293b}.panel h2{margin:0 0 8px}.name{font-size:21px;font-weight:700;margin:8px 0}#message{min-height:24px;margin-top:12px;color:var(--muted)}.note{font-size:13px;color:var(--muted)}@media(max-width:600px){body{padding:10px}.wrap{padding:18px;margin:5px auto}}
-</style></head>
-<body><main class="wrap">
-<h1>Visitor Entry — Laptop Scanner</h1><p class="muted">Reception webcam scanner. This page must be served over HTTPS.</p>
-<section id="loginPanel"><label for="staffCode">Staff access code</label><input id="staffCode" type="password" autocomplete="off" placeholder="Enter your 32-character staff code"><div class="actions"><button id="loginBtn" onclick="login()">Sign in</button></div><p id="loginMessage" role="status"></p></section>
-<section id="scannerPanel" class="hidden"><p id="signedInAs" class="muted"></p><label for="cameraSelect">Select laptop camera</label><select id="cameraSelect"></select><div class="actions"><button id="startBtn" onclick="startCamera()">Start camera</button><button class="secondary" onclick="stopCamera()">Stop camera</button></div><div id="reader"></div><p id="message" role="status">Camera is stopped.</p><section id="result" class="panel hidden" aria-live="polite"></section><div class="actions"><button id="nextBtn" class="hidden" onclick="scanNext()">Scan next visitor</button><button class="secondary" onclick="logout()">Sign out</button></div><p class="note">If no webcam appears, allow camera access in your browser's address-bar permissions and reload this page.</p></section>
-</main>
-<script>
-// Replace with your deployed Apps Script Web App URL, ending in /exec.
-const API_URL='https://script.google.com/macros/s/AKfycbwjjmT_kJjLRkcH6MFRK9OShJ9p8dpqjmGp2c3OXHiM7pFeFjwsatzrKmOyx3_OZ1RP/exec';
-const SESSION_KEY='visitor_qr_laptop_session_v1',STAFF_KEY='visitor_qr_laptop_staff_v1';
-let scanner=null,cameraRunning=false,processing=false,callbackCounter=0;
-const $=id=>document.getElementById(id);
-const validApi=()=>/^https:\/\/script\.google\.com\/macros\/s\//.test(API_URL)&&/\/exec$/.test(API_URL);
-function jsonp(action,params={}){return new Promise((resolve,reject)=>{if(!validApi())return reject(new Error('Set API_URL in index.html to your Apps Script /exec URL.'));const cb='visitorQrCallback_'+Date.now()+'_'+(++callbackCounter),q=new URLSearchParams({api:action,callback:cb,...params}),script=document.createElement('script');let done=false;const cleanup=()=>{if(done)return;done=true;clearTimeout(timer);script.remove();try{delete window[cb]}catch(_){window[cb]=undefined}};const timer=setTimeout(()=>{cleanup();reject(new Error('Server timed out. Check internet and retry.'))},25000);window[cb]=data=>{cleanup();resolve(data)};script.onerror=()=>{cleanup();reject(new Error('Could not contact Apps Script. Check the /exec URL and deployment access.'))};script.src=API_URL+(API_URL.includes('?')?'&':'?')+q.toString();document.body.appendChild(script)})}
-async function login(){const code=$('staffCode').value.trim();if(!/^[a-f0-9]{32}$/i.test(code)){$('loginMessage').textContent='Enter the 32-character staff access code.';return}$('loginBtn').disabled=true;$('loginMessage').textContent='Signing in…';try{const d=await jsonp('login',{code});if(!d||!d.ok)throw new Error(d?.message||'Sign-in failed.');localStorage.setItem(SESSION_KEY,d.sessionToken);localStorage.setItem(STAFF_KEY,d.staffName);$('staffCode').value='';showScanner();await loadCameras()}catch(e){$('loginMessage').textContent=e.message}finally{$('loginBtn').disabled=false}}
-function showScanner(){$('loginPanel').classList.add('hidden');$('scannerPanel').classList.remove('hidden');$('signedInAs').textContent='Signed in as '+(localStorage.getItem(STAFF_KEY)||'staff')}
-async function loadCameras(){if(typeof Html5Qrcode==='undefined'){$('message').textContent='QR library did not load. Check internet access and reload.';return}try{const cams=await Html5Qrcode.getCameras(),sel=$('cameraSelect');sel.innerHTML='';cams.forEach((c,i)=>{const o=document.createElement('option');o.value=c.id;o.textContent=c.label||'Camera '+(i+1);sel.appendChild(o)});if(!cams.length)throw new Error('No camera found. Check that a webcam is connected.');const preferred=cams.find(c=>/integrated|built.?in|webcam|front/i.test(c.label||''));if(preferred)sel.value=preferred.id;$('message').textContent='Camera found. Click Start camera.'}catch(e){$('message').textContent=e.message||'Unable to access webcam. Allow camera permission and reload.'}}
-async function startCamera(){if(cameraRunning||processing)return;const id=$('cameraSelect').value;if(!id){await loadCameras();return}if(!scanner)scanner=new Html5Qrcode('reader',{verbose:false});$('startBtn').disabled=true;$('message').textContent='Starting webcam…';try{await scanner.start(id,{fps:10,qrbox:{width:270,height:270},aspectRatio:1},txt=>onQrScanned(txt),()=>{});cameraRunning=true;$('message').textContent='Camera active. Hold a visitor QR code in front of the webcam.'}catch(e){$('message').textContent='Camera could not start: '+(e.message||e)+'. Check browser camera permission.'}finally{$('startBtn').disabled=false}}
-async function stopCamera(){if(scanner&&cameraRunning){try{await scanner.stop()}catch(_){}cameraRunning=false}$('message').textContent='Camera stopped.'}
-function extractToken(txt){const v=String(txt||'').trim(),m=v.match(/^v1:([a-f0-9]{64})$/i);if(m)return m[1].toLowerCase();try{const u=new URL(v),t=u.searchParams.get('t')||u.searchParams.get('token');if(t&&/^[a-f0-9]{64}$/i.test(t))return t.toLowerCase()}catch(_){}return null}
-async function onQrScanned(txt){if(processing)return;processing=true;await stopCamera();$('message').textContent='QR detected. Verifying visitor…';$('result').classList.add('hidden');$('nextBtn').classList.add('hidden');const token=extractToken(txt);if(!token){showResult({status:'INVALID',message:'This QR is not a recognized visitor QR code.'});return}try{const s=localStorage.getItem(SESSION_KEY);if(!s)throw new Error('Staff session missing. Sign in again.');const d=await jsonp('checkin',{t:token,s});if(d?.status==='UNAUTHORIZED'){localStorage.removeItem(SESSION_KEY);localStorage.removeItem(STAFF_KEY);$('scannerPanel').classList.add('hidden');$('loginPanel').classList.remove('hidden');$('loginMessage').textContent='Staff session expired. Sign in again.';return}showResult(d)}catch(e){showResult({status:'ERROR',message:e.message||'Unable to verify. Retry this QR.'})}}
-function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}function fmt(v){return v?new Date(v).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',dateStyle:'medium',timeStyle:'medium'}):'Not available'}
-function showResult(d){const b=$('result'),s=d?.status||'ERROR',v=d?.visitor||{};b.className='panel';let h=s,body='';if(s==='VALID'){b.classList.add('valid');h='✓ VALID — ENTRY RECORDED';body='<div class="name">'+esc(v.name)+'</div><div>Visitor ID: <b>'+esc(v.visitorId)+'</b></div><p>Entry time: <b>'+esc(fmt(d.checkedInAt))+'</b></p>'}else if(s==='ALREADY_CHECKED_IN'){b.classList.add('duplicate');h='⚠ ALREADY CHECKED IN';body='<div class="name">'+esc(v.name)+'</div><div>Visitor ID: <b>'+esc(v.visitorId)+'</b></div><p>First entry: <b>'+esc(fmt(d.checkedInAt))+'</b></p>'}else if(s==='INVALID'){b.classList.add('invalid');h='✕ INVALID QR';body='<p>'+esc(d.message)+'</p>'}else{b.classList.add('error');h=esc(s);body='<p>'+esc(d?.message||'Unable to verify visitor.')+'</p>'}b.innerHTML='<h2>'+h+'</h2>'+body;b.classList.remove('hidden');$('nextBtn').classList.remove('hidden');$('message').textContent='Reception staff: '+(localStorage.getItem(STAFF_KEY)||'staff')}
-async function scanNext(){processing=false;$('result').classList.add('hidden');$('nextBtn').classList.add('hidden');await startCamera()}
-async function logout(){await stopCamera();const s=localStorage.getItem(SESSION_KEY);localStorage.removeItem(SESSION_KEY);localStorage.removeItem(STAFF_KEY);if(s){try{await jsonp('logout',{s})}catch(_){}}$('scannerPanel').classList.add('hidden');$('loginPanel').classList.remove('hidden');$('loginMessage').textContent='Signed out.';processing=false}
-window.addEventListener('load',async()=>{if(!validApi()){$('loginMessage').textContent='Setup required: edit index.html and set API_URL to your Apps Script /exec URL.';return}const s=localStorage.getItem(SESSION_KEY);if(s){showScanner();await loadCameras()}});
-</script></body></html>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#070918">
+  <title>Attendee QR Entry Portal — Technology Dialogue 2026</title>
+  
+  <!-- Favicon -->
+  <link rel="icon" type="image/webp" href="logo.webp">
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- HTML5 QR Code Scanner Library -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="page-wrapper">
+    
+    <!-- Top Header -->
+    <header class="top-header">
+      <div class="header-container">
+        <div class="brand-group">
+          <img src="logo.webp" alt="Technology Dialogue 2026 Logo" class="brand-logo-img">
+          <div class="brand-divider"></div>
+          <div class="portal-title-block">
+            <h1>Technology Dialogue 2026</h1>
+            <p>Attendee Reception & Access Verification</p>
+          </div>
+        </div>
+        <div>
+          <span class="badge-tag">Official Entry Portal</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Event Meta Strip -->
+    <section class="event-info-strip">
+      <div class="event-info-container">
+        <div class="event-meta-item">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+          </svg>
+          <span><b>Dates:</b> 30th November – 2nd December, 2026</span>
+        </div>
+        <div class="event-meta-item">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+            <circle cx="12" cy="10" r="3"></circle>
+          </svg>
+          <span><b>Venue:</b> Indian Institute of Science (IISc), Bengaluru, India</span>
+        </div>
+        <div class="event-meta-item">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          <span>Secure Gate Authorization</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Main Workspace -->
+    <main class="main-content">
+      
+      <!-- Panel 1: Staff Authentication -->
+      <section id="loginPanel" class="portal-card">
+        <div class="card-hero">
+          <h2>Reception Staff Access</h2>
+          <p class="subtitle">Authenticate with your authorized reception terminal credentials to activate attendee badge check-in.</p>
+        </div>
+
+        <form onsubmit="event.preventDefault(); login();" style="max-width: 480px; margin: 0 auto;">
+          <div class="form-group">
+            <label for="staffCode" class="form-label">
+              <span>Security Staff Access Code</span>
+              <span style="font-size: 0.76rem; color: var(--text-dim); font-weight: normal;">32 hex characters</span>
+            </label>
+            <div class="input-wrapper">
+              <span class="input-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+              </span>
+              <input 
+                id="staffCode" 
+                class="form-control" 
+                type="password" 
+                autocomplete="off" 
+                placeholder="Paste or enter 32-character staff token"
+                required
+              >
+            </div>
+          </div>
+
+          <div style="margin-top: 24px;">
+            <button id="loginBtn" type="submit" class="btn-primary" style="width: 100%;">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+                <polyline points="10 17 15 12 10 7"></polyline>
+                <line x1="15" y1="12" x2="3" y2="12"></line>
+              </svg>
+              Authorize & Launch Scanner
+            </button>
+          </div>
+
+          <p id="loginMessage" class="text-warning" role="status" style="text-align: center;"></p>
+        </form>
+      </section>
+
+      <!-- Panel 2: Live Attendee Entry Scanner -->
+      <section id="scannerPanel" class="portal-card hidden">
+        <div class="scanner-grid">
+          
+          <!-- Left Column: Camera Viewport -->
+          <div class="scanner-viewport-box">
+            <div class="form-group">
+              <label for="cameraSelect" class="form-label">
+                <span>Select Optical Camera Feed</span>
+                <span id="cameraCountLabel" style="font-size: 0.76rem; color: var(--text-muted);">Detecting cameras…</span>
+              </label>
+              <div class="input-wrapper">
+                <span class="input-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                    <circle cx="12" cy="13" r="4"></circle>
+                  </svg>
+                </span>
+                <select id="cameraSelect" class="form-control" onchange="onCameraChanged()"></select>
+              </div>
+            </div>
+
+            <!-- Video feed reader -->
+            <div class="scanner-view-container">
+              <div class="scanner-feed">
+                <div id="reader"></div>
+                <div id="scannerOverlay" class="scanner-target-overlay hidden">
+                  <div class="scanner-laser"></div>
+                </div>
+              </div>
+              <div class="status-bar">
+                <span class="status-indicator">
+                  <span id="statusDot" class="status-dot"></span>
+                  <span id="message">Webcam is idle.</span>
+                </span>
+                <span id="latencyTag" style="font-size: 0.72rem; color: var(--text-dim);">Ready</span>
+              </div>
+            </div>
+
+            <!-- Camera Controls -->
+            <div class="btn-group" style="margin-top: 16px;">
+              <button id="startBtn" class="btn-primary" onclick="startCamera()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                Start Camera
+              </button>
+              <button class="btn-secondary" onclick="stopCamera()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="6" y="6" width="12" height="12"></rect>
+                </svg>
+                Pause Camera
+              </button>
+            </div>
+
+            <!-- Manual Token Entry Accordion for Scratched / Damaged Badges -->
+            <div class="manual-box">
+              <button type="button" class="manual-toggle-btn" onclick="toggleManualEntry()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+                Manual Token Fallback (If QR Damaged)
+              </button>
+              <div id="manualEntryForm" class="hidden" style="margin-top: 10px;">
+                <div style="display: flex; gap: 8px;">
+                  <input id="manualToken" class="form-control" placeholder="Enter attendee token hex / raw code" style="padding-left: 14px;">
+                  <button class="btn-secondary btn-sm" onclick="submitManualToken()" style="white-space: nowrap;">Verify Token</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Column: Verification Results & Session Overview -->
+          <div class="scanner-sidebar">
+            
+            <!-- Session Info Panel -->
+            <div class="session-info-card">
+              <div class="session-header">
+                <div class="staff-info">
+                  <div class="staff-avatar" id="staffAvatar">TD</div>
+                  <div class="staff-details">
+                    <h4 id="signedInAs">Staff Officer</h4>
+                    <p>Registration Desk #1</p>
+                  </div>
+                </div>
+                <button class="btn-secondary btn-sm" onclick="logout()" title="Sign out terminal">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                    <polyline points="16 17 21 12 16 7"></polyline>
+                    <line x1="21" y1="12" x2="9" y2="12"></line>
+                  </svg>
+                  Exit
+                </button>
+              </div>
+
+              <div class="stats-row">
+                <div class="stat-box">
+                  <div class="stat-value" id="sessionCount">0</div>
+                  <div class="stat-label">Verified Attendees</div>
+                </div>
+                <div class="stat-box">
+                  <div class="stat-value" id="lastCheckinTime">--:--</div>
+                  <div class="stat-label">Last Check-in</div>
+                </div>
+              </div>
+
+              <!-- Live Verification Result Card -->
+              <div id="result" class="result-card hidden" aria-live="polite"></div>
+
+              <div style="margin-top: 16px;">
+                <button id="nextBtn" class="btn-primary hidden" onclick="scanNext()" style="width: 100%;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="9 18 15 12 9 6"></polyline>
+                  </svg>
+                  Scan Next Attendee
+                </button>
+              </div>
+            </div>
+
+            <!-- Event Details Card -->
+            <div style="margin-top: 18px; padding: 16px; background: rgba(255,255,255,0.02); border: 1px dashed rgba(255,255,255,0.1); border-radius: var(--radius-md);">
+              <h5 style="font-size: 0.85rem; color: #e2e8f0; margin-bottom: 6px; font-weight: 700;">Conference Access Rules:</h5>
+              <ul style="font-size: 0.78rem; color: var(--text-muted); padding-left: 18px; line-height: 1.6;">
+                <li>Attendees must present their digital or printed QR badge.</li>
+                <li>Valid passes display real-time green authorization.</li>
+                <li>Security badges are valid across all 3 days (Nov 30 – Dec 2, 2026).</li>
+              </ul>
+            </div>
+
+          </div>
+
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="portal-footer">
+      <div class="footer-container">
+        <div>
+          <b>Technology Dialogue 2026</b> &bull; Hosted at Indian Institute of Science (IISc), Bengaluru
+        </div>
+        <div class="footer-partners">
+          <span class="footer-partner-item">Office of the Principal Scientific Adviser to GoI</span>
+          <span>&bull;</span>
+          <span class="footer-partner-item">Ministry of External Affairs</span>
+          <span>&bull;</span>
+          <span class="footer-partner-item">IISc Bengaluru</span>
+        </div>
+      </div>
+    </footer>
+
+  </div>
+
+  <script>
+    // Replace with your deployed Apps Script Web App URL, ending in /exec.
+    const API_URL = 'https://script.google.com/macros/s/AKfycbwjjmT_kJjLRkcH6MFRK9OShJ9p8dpqjmGp2c3OXHiM7pFeFjwsatzrKmOyx3_OZ1RP/exec';
+    const SESSION_KEY = 'visitor_qr_laptop_session_v1', STAFF_KEY = 'visitor_qr_laptop_staff_v1';
+    
+    let scanner = null, cameraRunning = false, processing = false, callbackCounter = 0;
+    let verifiedCount = 0;
+    
+    const $ = id => document.getElementById(id);
+    const validApi = () => /^https:\/\/script\.google\.com\/macros\/s\//.test(API_URL) && /\/exec$/.test(API_URL);
+
+    // Audio cue generator using Web Audio API (Clean, pleasant confirmation sound)
+    function playBeep(type = 'success') {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        if (type === 'success') {
+          osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
+          osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.08); // A5
+          gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.28);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.3);
+        } else if (type === 'duplicate') {
+          osc.frequency.setValueAtTime(440, audioCtx.currentTime);
+          gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.35);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.36);
+        } else {
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(220, audioCtx.currentTime);
+          osc.frequency.setValueAtTime(160, audioCtx.currentTime + 0.1);
+          gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.32);
+        }
+      } catch (e) {
+        // AudioContext may be restricted before interaction
+      }
+    }
+
+    function jsonp(action, params = {}) {
+      return new Promise((resolve, reject) => {
+        if (!validApi()) return reject(new Error('Set API_URL in index.html to your Apps Script /exec URL.'));
+        const cb = 'visitorQrCallback_' + Date.now() + '_' + (++callbackCounter);
+        const q = new URLSearchParams({ api: action, callback: cb, ...params });
+        const script = document.createElement('script');
+        let done = false;
+
+        const cleanup = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          script.remove();
+          try { delete window[cb]; } catch (_) { window[cb] = undefined; }
+        };
+
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error('Server timed out. Check internet connection and retry.'));
+        }, 25000);
+
+        window[cb] = data => {
+          cleanup();
+          resolve(data);
+        };
+
+        script.onerror = () => {
+          cleanup();
+          reject(new Error('Could not contact Apps Script. Verify Google Script deployment access.'));
+        };
+
+        script.src = API_URL + (API_URL.includes('?') ? '&' : '?') + q.toString();
+        document.body.appendChild(script);
+      });
+    }
+
+    async function login() {
+      const code = $('staffCode').value.trim();
+      if (!/^[a-f0-9]{32}$/i.test(code)) {
+        $('loginMessage').textContent = 'Please enter a valid 32-character hexadecimal staff access code.';
+        return;
+      }
+      $('loginBtn').disabled = true;
+      $('loginMessage').textContent = 'Authenticating staff credentials…';
+      try {
+        const d = await jsonp('login', { code });
+        if (!d || !d.ok) throw new Error(d?.message || 'Authentication rejected.');
+        localStorage.setItem(SESSION_KEY, d.sessionToken);
+        localStorage.setItem(STAFF_KEY, d.staffName);
+        $('staffCode').value = '';
+        showScanner();
+        await loadCameras();
+      } catch (e) {
+        $('loginMessage').textContent = e.message;
+      } finally {
+        $('loginBtn').disabled = false;
+      }
+    }
+
+    function showScanner() {
+      $('loginPanel').classList.add('hidden');
+      $('scannerPanel').classList.remove('hidden');
+      const staffName = localStorage.getItem(STAFF_KEY) || 'Reception Staff';
+      $('signedInAs').textContent = staffName;
+      $('staffAvatar').textContent = staffName.substring(0, 2).toUpperCase();
+    }
+
+    async function loadCameras() {
+      if (typeof Html5Qrcode === 'undefined') {
+        $('message').textContent = 'Scanner library failed to load. Check internet access.';
+        return;
+      }
+      try {
+        const cams = await Html5Qrcode.getCameras(), sel = $('cameraSelect');
+        sel.innerHTML = '';
+        cams.forEach((c, i) => {
+          const o = document.createElement('option');
+          o.value = c.id;
+          o.textContent = c.label || `Camera ${i + 1}`;
+          sel.appendChild(o);
+        });
+
+        $('cameraCountLabel').textContent = `${cams.length} device${cams.length === 1 ? '' : 's'} available`;
+
+        if (!cams.length) throw new Error('No webcam detected. Please plug in or enable camera permissions.');
+        const preferred = cams.find(c => /integrated|built.?in|webcam|front|user/i.test(c.label || ''));
+        if (preferred) sel.value = preferred.id;
+        $('message').textContent = 'Camera ready. Click Start Camera to begin scanning.';
+      } catch (e) {
+        $('message').textContent = e.message || 'Unable to access camera.';
+        $('cameraCountLabel').textContent = 'No camera access';
+      }
+    }
+
+    async function onCameraChanged() {
+      if (cameraRunning) {
+        await stopCamera();
+        await startCamera();
+      }
+    }
+
+    async function startCamera() {
+      if (cameraRunning || processing) return;
+      const id = $('cameraSelect').value;
+      if (!id) {
+        await loadCameras();
+        return;
+      }
+      if (!scanner) scanner = new Html5Qrcode('reader', { verbose: false });
+      $('startBtn').disabled = true;
+      $('message').textContent = 'Initializing optical sensor…';
+      $('statusDot').classList.remove('active');
+
+      try {
+        await scanner.start(
+          id, 
+          { 
+            fps: 15, 
+            qrbox: { width: 260, height: 260 }, 
+            aspectRatio: 1.0 
+          }, 
+          txt => onQrScanned(txt), 
+          () => {}
+        );
+        cameraRunning = true;
+        $('statusDot').classList.add('active');
+        $('scannerOverlay').classList.remove('hidden');
+        $('message').textContent = 'Scanner active. Present attendee QR code.';
+        $('latencyTag').textContent = 'Scanning live';
+      } catch (e) {
+        $('message').textContent = 'Camera failed: ' + (e.message || e);
+        $('statusDot').classList.remove('active');
+        $('scannerOverlay').classList.add('hidden');
+      } finally {
+        $('startBtn').disabled = false;
+      }
+    }
+
+    async function stopCamera() {
+      if (scanner && cameraRunning) {
+        try { 
+          await scanner.stop(); 
+        } catch (_) {}
+        cameraRunning = false;
+      }
+      $('statusDot').classList.remove('active');
+      $('scannerOverlay').classList.add('hidden');
+      $('message').textContent = 'Camera paused.';
+      $('latencyTag').textContent = 'Paused';
+    }
+
+    function extractToken(txt) {
+      const v = String(txt || '').trim();
+      const m = v.match(/^v1:([a-f0-9]{64})$/i);
+      if (m) return m[1].toLowerCase();
+      try {
+        const u = new URL(v);
+        const t = u.searchParams.get('t') || u.searchParams.get('token');
+        if (t && /^[a-f0-9]{64}$/i.test(t)) return t.toLowerCase();
+      } catch (_) {}
+      if (/^[a-f0-9]{64}$/i.test(v)) return v.toLowerCase();
+      return null;
+    }
+
+    async function onQrScanned(txt) {
+      if (processing) return;
+      processing = true;
+      await stopCamera();
+      $('message').textContent = 'QR detected. Validating credentials…';
+      $('result').classList.add('hidden');
+      $('nextBtn').classList.add('hidden');
+
+      const token = extractToken(txt);
+      if (!token) {
+        playBeep('invalid');
+        showResult({ status: 'INVALID', message: 'The presented code is not recognized as a Technology Dialogue 2026 QR badge.' });
+        return;
+      }
+
+      try {
+        const s = localStorage.getItem(SESSION_KEY);
+        if (!s) throw new Error('Staff session expired. Please sign in again.');
+        const d = await jsonp('checkin', { t: token, s });
+        if (d?.status === 'UNAUTHORIZED') {
+          localStorage.removeItem(SESSION_KEY);
+          localStorage.removeItem(STAFF_KEY);
+          $('scannerPanel').classList.add('hidden');
+          $('loginPanel').classList.remove('hidden');
+          $('loginMessage').textContent = 'Session timed out. Please sign in again.';
+          return;
+        }
+        showResult(d);
+      } catch (e) {
+        playBeep('invalid');
+        showResult({ status: 'ERROR', message: e.message || 'Unable to complete check-in verification.' });
+      }
+    }
+
+    function toggleManualEntry() {
+      $('manualEntryForm').classList.toggle('hidden');
+    }
+
+    async function submitManualToken() {
+      const input = $('manualToken').value.trim();
+      if (!input) return;
+      await onQrScanned(input);
+      $('manualToken').value = '';
+    }
+
+    function esc(v) {
+      return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>'; '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function fmt(v) {
+      return v ? new Date(v).toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+      }) : 'Not available';
+    }
+
+    function showResult(d) {
+      const b = $('result'), s = d?.status || 'ERROR', v = d?.visitor || {};
+      b.className = 'result-card';
+      
+      let badgeHtml = '', contentHtml = '';
+
+      if (s === 'VALID') {
+        playBeep('success');
+        b.classList.add('valid');
+        verifiedCount++;
+        $('sessionCount').textContent = verifiedCount;
+        $('lastCheckinTime').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        badgeHtml = `
+          <div class="result-badge">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            ENTRY APPROVED & RECORDED
+          </div>
+        `;
+
+        contentHtml = `
+          <div class="attendee-name">${esc(v.name || 'Delegate')}</div>
+          <p style="color: var(--success-text); font-size: 0.88rem; font-weight: 600;">Authorized for all sessions (Nov 30 – Dec 2, IISc Bengaluru)</p>
+          <div class="attendee-meta-grid">
+            <div class="meta-field">
+              <label>Visitor / Badge ID</label>
+              <span>${esc(v.visitorId || 'TD-2026')}</span>
+            </div>
+            <div class="meta-field">
+              <label>Timestamp</label>
+              <span>${esc(fmt(d.checkedInAt))}</span>
+            </div>
+            <div class="meta-field">
+              <label>Pass Status</label>
+              <span class="text-success">Active &bull; Validated</span>
+            </div>
+          </div>
+        `;
+      } else if (s === 'ALREADY_CHECKED_IN') {
+        playBeep('duplicate');
+        b.classList.add('duplicate');
+        badgeHtml = `
+          <div class="result-badge">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="8" x2="12" y2="12"></line>
+              <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+            ALREADY CHECKED IN
+          </div>
+        `;
+        contentHtml = `
+          <div class="attendee-name">${esc(v.name || 'Delegate')}</div>
+          <p style="color: var(--warning-text); font-size: 0.88rem; margin-bottom: 8px;">Badge has already passed entry gate.</p>
+          <div class="attendee-meta-grid">
+            <div class="meta-field">
+              <label>Visitor ID</label>
+              <span>${esc(v.visitorId || 'TD-2026')}</span>
+            </div>
+            <div class="meta-field">
+              <label>First Registered Entry</label>
+              <span>${esc(fmt(d.checkedInAt))}</span>
+            </div>
+          </div>
+        `;
+      } else if (s === 'INVALID') {
+        playBeep('invalid');
+        b.classList.add('invalid');
+        badgeHtml = `
+          <div class="result-badge">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+            INVALID CREDENTIAL
+          </div>
+        `;
+        contentHtml = `
+          <div class="attendee-name" style="font-size: 1.25rem;">Access Denied</div>
+          <p style="color: #fca5a5; font-size: 0.88rem; margin-top: 6px;">${esc(d.message || 'QR badge code is not valid or has expired.')}</p>
+        `;
+      } else {
+        playBeep('invalid');
+        b.classList.add('error');
+        badgeHtml = `
+          <div class="result-badge">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"></polygon>
+              <line x1="12" y1="8" x2="12" y2="12"></line>
+              <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+            SYSTEM / NETWORK ALERT
+          </div>
+        `;
+        contentHtml = `
+          <div class="attendee-name" style="font-size: 1.25rem;">Verification Error</div>
+          <p style="color: #cbd5e1; font-size: 0.88rem; margin-top: 6px;">${esc(d?.message || 'Server did not respond. Check reception Wi-Fi and retry.')}</p>
+        `;
+      }
+
+      b.innerHTML = badgeHtml + contentHtml;
+      b.classList.remove('hidden');
+      $('nextBtn').classList.remove('hidden');
+      $('message').textContent = 'Action complete. Click "Scan Next Attendee" or present new pass.';
+    }
+
+    async function scanNext() {
+      processing = false;
+      $('result').classList.add('hidden');
+      $('nextBtn').classList.add('hidden');
+      await startCamera();
+    }
+
+    async function logout() {
+      await stopCamera();
+      const s = localStorage.getItem(SESSION_KEY);
+      localStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem(STAFF_KEY);
+      if (s) {
+        try { await jsonp('logout', { s }); } catch (_) {}
+      }
+      $('scannerPanel').classList.add('hidden');
+      $('loginPanel').classList.remove('hidden');
+      $('loginMessage').textContent = 'Logged out successfully.';
+      processing = false;
+    }
+
+    window.addEventListener('load', async () => {
+      if (!validApi()) {
+        $('loginMessage').textContent = 'Configuration notice: Update API_URL in index.html to your Google Apps Script /exec URL.';
+        return;
+      }
+      const s = localStorage.getItem(SESSION_KEY);
+      if (s) {
+        showScanner();
+        await loadCameras();
+      }
+    });
+  </script>
+</body>
+</html>
