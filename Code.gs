@@ -276,46 +276,61 @@ function verifyAdminPrintCode_(code) {
 // Visitor QR code generation and printing
 // -----------------------------------------------------------------------------
 
+
 function generateMissingQrCodes() {
   const sheet = getSpreadsheet_().getSheetByName(CFG.SHEET.VISITORS);
   const lastRow = sheet.getLastRow();
+
   if (lastRow < 2) {
-    SpreadsheetApp.getUi().alert('Paste visitor IDs in column A and names in column B first.');
+    SpreadsheetApp.getUi().alert('Enter visitor IDs in column A first.');
     return;
   }
 
   const baseUrl = getWebAppUrl_();
   const rows = sheet.getRange(2, 1, lastRow - 1, 9).getValues();
-  const ids = rows.filter(r => r[0] !== '').map(r => String(r[0]).trim());
+
+  const ids = rows
+    .filter(r => r[0] !== '')
+    .map(r => String(r[0]).trim());
+
   if (new Set(ids).size !== ids.length) {
-    throw new Error('Duplicate Visitor IDs found. Each Visitor ID must be unique.');
+    throw new Error('Duplicate Visitor IDs found.');
   }
 
   let generated = 0;
+
   rows.forEach(row => {
     const visitorId = String(row[0] || '').trim();
-    const name = String(row[1] || '').trim();
-    if (!visitorId && !name) return;
-    if (!visitorId || !name) throw new Error('Every visitor row must contain both Visitor ID and Name.');
 
+    // Only Visitor ID is compulsory
+    if (!visitorId) return;
+
+    // Generate token if missing
     if (!row[2] || !row[3]) {
       const token = randomHexToken_();
       row[2] = token;
       row[3] = sha256_(token);
       generated++;
     }
-    row[4] = baseUrl + '?t=' + encodeURIComponent(String(row[2]));
+
+    // Generate QR URL
+    row[4] = baseUrl + '?t=' +
+      encodeURIComponent(String(row[2]));
+
     if (!row[5]) row[5] = 'PENDING';
-    if (row[8] === '' || row[8] === null) row[8] = true;
+    if (row[8] === '' || row[8] === null) {
+      row[8] = true;
+    }
   });
 
   sheet.getRange(2, 1, rows.length, 9).setValues(rows);
   SpreadsheetApp.flush();
+
   SpreadsheetApp.getUi().alert(
-    generated + ' new QR token(s) generated.\n' +
-    'QR links are ready. Use Visitor QR System → Print all visitor QR codes.'
+    generated + ' visitor QR codes generated successfully.'
   );
 }
+
 
 function refreshQrLinks() {
   const baseUrl = getWebAppUrl_();
@@ -343,32 +358,51 @@ function showQrPrintPage() {
   SpreadsheetApp.getUi().showModalDialog(html, 'Print visitor QR cards');
 }
 
+
 function getQrPrintData(adminCode) {
-  if (!verifyAdminPrintCode_(adminCode)) throw new Error('Incorrect administrator print code.');
+  if (!verifyAdminPrintCode_(adminCode)) {
+    throw new Error('Incorrect administrator print code.');
+  }
+
   const sheet = getSpreadsheet_().getSheetByName(CFG.SHEET.VISITORS);
   const lastRow = sheet.getLastRow();
+
   if (lastRow < 2) return [];
 
   return sheet.getRange(2, 1, lastRow - 1, 9).getValues()
-    .filter(row => row[0] && row[1] && row[4] && isTrue_(row[8]))
-    .map(row => ({ visitorId: String(row[0]), name: String(row[1]), qrUrl: String(row[4]) }));
+    .filter(row => row[0] && row[4] && isTrue_(row[8]))
+    .map(row => ({
+      visitorId: String(row[0]),
+      name: String(row[1] || ''),
+      qrUrl: String(row[4])
+    }));
 }
+
 
 // -----------------------------------------------------------------------------
 // Web app and visitor check-in
 // -----------------------------------------------------------------------------
 
 function doGet(e) {
-  // Laptop scanner is hosted outside Apps Script so the browser can access
-  // the webcam. It calls these JSONP endpoints because Apps Script web apps
-  // do not provide a configurable CORS response for a normal cross-origin fetch.
-  if (e && e.parameter && e.parameter.api) return handleJsonpApi_(e);
 
-  const rawToken = e && e.parameter ? String(e.parameter.t || '') : '';
-  const token = /^[a-f0-9]{64}$/i.test(rawToken) ? rawToken.toLowerCase() : '';
-  const template = HtmlService.createTemplateFromFile('Scanner');
+  if (e && e.parameter && e.parameter.api) {
+    return handleJsonpApi_(e);
+  }
+
+  const rawToken = e && e.parameter
+    ? String(e.parameter.t || '')
+    : '';
+
+  const token = /^[a-f0-9]{64}$/i.test(rawToken)
+    ? rawToken.toLowerCase()
+    : '';
+
+  const template =
+    HtmlService.createTemplateFromFile('Scanner');
+
   template.qrToken = token ? ('v1:' + token) : '';
   template.appUrl = ScriptApp.getService().getUrl() || '';
+
   return template.evaluate()
     .setTitle('Visitor QR Check-in')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
