@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { color-scheme: light; --green:#15803d; --red:#b91c1c; --amber:#a16207; --blue:#1d4ed8; }
+    * { box-sizing: border-box; }
+    body { margin:0; padding:18px; background:#f3f4f6; font-family:Arial,sans-serif; color:#111827; }
+    .card { max-width:460px; margin:28px auto; padding:24px; background:#fff; border-radius:18px; box-shadow:0 5px 24px #00000012; }
+    h1 { margin:0 0 8px; font-size:24px; }
+    .muted { color:#6b7280; line-height:1.5; }
+    label { display:block; margin:20px 0 7px; font-weight:700; }
+    input { width:100%; padding:14px; border:1px solid #d1d5db; border-radius:10px; font-size:16px; }
+    button, .button { display:block; width:100%; margin-top:14px; padding:14px 16px; border:0; border-radius:10px; background:var(--blue); color:white; font-size:16px; font-weight:700; text-align:center; cursor:pointer; text-decoration:none; }
+    button.secondary { background:#374151; }
+    button:disabled { opacity:.6; cursor:wait; }
+    .hidden { display:none !important; }
+    .result { margin-top:20px; padding:20px; border-radius:14px; line-height:1.5; overflow-wrap:anywhere; }
+    .valid { background:#dcfce7; color:#14532d; }
+    .duplicate { background:#fef3c7; color:#78350f; }
+    .invalid { background:#fee2e2; color:#7f1d1d; }
+    .error { background:#e5e7eb; color:#1f2937; }
+    .result h2 { margin:0 0 10px; font-size:22px; }
+    .name { font-size:20px; font-weight:700; margin:10px 0 4px; }
+    .small { font-size:13px; color:#4b5563; }
+    .statusline { min-height:24px; margin-top:12px; color:#6b7280; font-size:14px; }
+    .staffline { margin:0 0 18px; color:#6b7280; font-size:13px; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Visitor Entry Verification</h1>
+    <p class="muted">Authorized reception staff only. Scan a visitor's QR using the phone's built-in Camera app.</p>
+
+    <section id="loginPanel" class="hidden">
+      <label for="accessCode">Staff access code</label>
+      <input id="accessCode" type="password" autocomplete="off" placeholder="Enter your 32-character staff code">
+      <button id="loginButton" onclick="login()">Sign in</button>
+      <p id="loginMessage" class="statusline" aria-live="polite"></p>
+    </section>
+
+    <section id="homePanel" class="hidden">
+      <p id="welcome" class="staffline"></p>
+      <div class="result error">
+        <h2>Scanner station ready</h2>
+        <p>Open your phone's Camera app, point it at the visitor's QR card and tap the link that appears. The visitor will be checked in automatically.</p>
+        <p class="small">After each result, return to the Camera app and scan the next visitor.</p>
+      </div>
+      <button class="secondary" onclick="logout()">Sign out</button>
+    </section>
+
+    <section id="loadingPanel" class="hidden">
+      <div class="result error"><h2>Verifying visitor…</h2><p>Please keep this page open.</p></div>
+    </section>
+
+    <section id="resultPanel" class="hidden" aria-live="polite">
+      <p id="staffLineResult" class="staffline"></p>
+      <div id="resultBox" class="result"></div>
+      <button class="secondary" onclick="goHome()">Done — return to scanner home</button>
+      <button class="secondary" onclick="logout()">Sign out</button>
+    </section>
+  </main>
+
+  <script>
+    // QR codes contain a unique Apps Script web-app URL with ?t=<64-hex-token>.
+    const QR_TOKEN = <?!= JSON.stringify(qrToken) ?>;
+    const APP_URL = <?!= JSON.stringify(appUrl) ?>;
+    const SESSION_KEY = 'visitor_qr_session_v1';
+    const STAFF_KEY = 'visitor_qr_staff_v1';
+
+    function el(id) { return document.getElementById(id); }
+    function showOnly(id) {
+      ['loginPanel','homePanel','loadingPanel','resultPanel'].forEach(x => el(x).classList.add('hidden'));
+      el(id).classList.remove('hidden');
+    }
+    function escapeHtml(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      })[c]);
+    }
+    function formatTime(iso) {
+      if (!iso) return 'Not available';
+      const date = new Date(iso);
+      return date.toLocaleString('en-IN', { timeZone:'Asia/Kolkata', dateStyle:'medium', timeStyle:'medium' });
+    }
+
+    window.addEventListener('load', function() {
+      const session = localStorage.getItem(SESSION_KEY);
+      if (!session) {
+        showOnly('loginPanel');
+        return;
+      }
+      if (QR_TOKEN) {
+        verifyVisitor(session);
+      } else {
+        showHome();
+      }
+    });
+
+    function login() {
+      const code = el('accessCode').value.trim();
+      if (!/^[a-f0-9]{32}$/i.test(code)) {
+        el('loginMessage').textContent = 'Enter the staff access code supplied by the administrator.';
+        return;
+      }
+      el('loginButton').disabled = true;
+      el('loginMessage').textContent = 'Signing in…';
+      google.script.run
+        .withSuccessHandler(function(response) {
+          el('loginButton').disabled = false;
+          if (!response || !response.ok) {
+            el('loginMessage').textContent = response ? response.message : 'Sign-in failed.';
+            return;
+          }
+          localStorage.setItem(SESSION_KEY, response.sessionToken);
+          localStorage.setItem(STAFF_KEY, response.staffName);
+          el('accessCode').value = '';
+          if (QR_TOKEN) verifyVisitor(response.sessionToken);
+          else showHome();
+        })
+        .withFailureHandler(function(error) {
+          el('loginButton').disabled = false;
+          el('loginMessage').textContent = error && error.message ? error.message : 'Unable to sign in.';
+        })
+        .loginStaff(code);
+    }
+
+    function verifyVisitor(sessionToken) {
+      showOnly('loadingPanel');
+      google.script.run
+        .withSuccessHandler(displayResult)
+        .withFailureHandler(function(error) {
+          renderError(error && error.message ? error.message : 'Server request failed.');
+        })
+        .checkInVisitor(QR_TOKEN, sessionToken);
+    }
+
+    function displayResult(data) {
+      if (!data) return renderError('No response received from the server.');
+      if (data.status === 'UNAUTHORIZED') {
+        localStorage.removeItem(SESSION_KEY);
+        localStorage.removeItem(STAFF_KEY);
+        showOnly('loginPanel');
+        el('loginMessage').textContent = data.message + ' Sign in again to continue.';
+        return;
+      }
+
+      const box = el('resultBox');
+      box.className = 'result';
+      let html = '';
+      const visitor = data.visitor || {};
+
+      if (data.status === 'VALID') {
+        box.classList.add('valid');
+        html = '<h2>✓ VALID — ENTRY RECORDED</h2>' +
+          '<div class="name">' + escapeHtml(visitor.name) + '</div>' +
+          '<div>Visitor ID: <strong>' + escapeHtml(visitor.visitorId) + '</strong></div>' +
+          '<p>Entry time: <strong>' + escapeHtml(formatTime(data.checkedInAt)) + '</strong></p>';
+      } else if (data.status === 'ALREADY_CHECKED_IN') {
+        box.classList.add('duplicate');
+        html = '<h2>⚠ ALREADY CHECKED IN</h2>' +
+          '<div class="name">' + escapeHtml(visitor.name) + '</div>' +
+          '<div>Visitor ID: <strong>' + escapeHtml(visitor.visitorId) + '</strong></div>' +
+          '<p>First entry: <strong>' + escapeHtml(formatTime(data.checkedInAt)) + '</strong></p>';
+      } else if (data.status === 'INVALID') {
+        box.classList.add('invalid');
+        html = '<h2>✕ INVALID QR</h2><p>' + escapeHtml(data.message) + '</p>';
+        if (visitor.visitorId) html += '<p>' + escapeHtml(visitor.visitorId) + ' — ' + escapeHtml(visitor.name) + '</p>';
+      } else {
+        box.classList.add('error');
+        html = '<h2>' + escapeHtml(data.status || 'ERROR') + '</h2><p>' + escapeHtml(data.message || 'Unable to verify visitor.') + '</p>';
+        if (data.status === 'BUSY') html += '<p>Please retry this visitor QR.</p>';
+      }
+
+      box.innerHTML = html;
+      el('staffLineResult').textContent = 'Reception staff: ' + (localStorage.getItem(STAFF_KEY) || 'Authenticated');
+      showOnly('resultPanel');
+    }
+
+    function renderError(message) {
+      el('resultBox').className = 'result error';
+      el('resultBox').textContent = message;
+      el('staffLineResult').textContent = '';
+      showOnly('resultPanel');
+    }
+
+    function showHome() {
+      el('welcome').textContent = 'Signed in as ' + (localStorage.getItem(STAFF_KEY) || 'staff') + '. Session is valid for up to 6 hours.';
+      showOnly('homePanel');
+    }
+
+    function goHome() {
+      if (APP_URL) window.location.href = APP_URL;
+      else showHome();
+    }
+
+    function logout() {
+      const session = localStorage.getItem(SESSION_KEY);
+      localStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem(STAFF_KEY);
+      if (session) google.script.run.logoutStaff(session);
+      if (APP_URL) window.location.href = APP_URL;
+      else showOnly('loginPanel');
+    }
+  </script>
+</body>
+</html>

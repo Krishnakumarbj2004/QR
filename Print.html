@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <style>
+    * { box-sizing:border-box; }
+    body { margin:0; padding:18px; font-family:Arial,sans-serif; color:#111827; }
+    .controls { padding:14px; margin-bottom:16px; border:1px solid #d1d5db; border-radius:10px; }
+    input { width:320px; max-width:100%; padding:12px; font-size:15px; }
+    button { padding:11px 16px; margin:6px 4px 0 0; border:0; border-radius:7px; background:#1d4ed8; color:#fff; font-weight:700; cursor:pointer; }
+    button:disabled { opacity:.5; }
+    #message { color:#4b5563; font-size:14px; }
+    .grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
+    .card { min-height:220px; padding:12px 8px; border:1px solid #9ca3af; border-radius:8px; text-align:center; break-inside:avoid; page-break-inside:avoid; }
+    .event { font-size:10px; letter-spacing:1px; color:#6b7280; text-transform:uppercase; }
+    .name { margin:8px 0 3px; font-size:15px; font-weight:700; overflow-wrap:anywhere; }
+    .id { margin:0 0 8px; font-size:12px; color:#4b5563; }
+    .qr { display:flex; justify-content:center; min-height:132px; }
+    .instruction { margin-top:6px; font-size:10px; color:#6b7280; }
+    @media print {
+      .controls { display:none !important; }
+      body { padding:0; }
+      .grid { gap:7px; }
+      .card { border:1px solid #777; border-radius:4px; min-height:205px; }
+      @page { size:A4; margin:9mm; }
+    }
+  </style>
+</head>
+<body>
+  <section class="controls">
+    <h2>Visitor QR card printing</h2>
+    <p>Enter the administrator print code. The code is verified on the server and is not saved in this page.</p>
+    <input id="adminCode" type="password" autocomplete="off" placeholder="Administrator print code">
+    <button id="loadButton" onclick="loadQrCards()">Load QR cards</button>
+    <button id="printButton" onclick="window.print()" disabled>Print / Save as PDF</button>
+    <p id="message" aria-live="polite">Waiting for administrator verification.</p>
+  </section>
+
+  <main id="cards" class="grid"></main>
+
+  <script>
+    function loadQrCards() {
+      const code = document.getElementById('adminCode').value;
+      const button = document.getElementById('loadButton');
+      const message = document.getElementById('message');
+      button.disabled = true;
+      message.textContent = 'Verifying code and loading visitor list…';
+      document.getElementById('cards').innerHTML = '';
+      document.getElementById('printButton').disabled = true;
+
+      google.script.run
+        .withSuccessHandler(renderCards)
+        .withFailureHandler(function(error) {
+          button.disabled = false;
+          message.textContent = error && error.message ? error.message : 'Unable to load QR cards.';
+        })
+        .getQrPrintData(code);
+    }
+
+    function renderCards(visitors) {
+      document.getElementById('loadButton').disabled = false;
+      const message = document.getElementById('message');
+      const container = document.getElementById('cards');
+      container.innerHTML = '';
+
+      if (!Array.isArray(visitors) || visitors.length === 0) {
+        message.textContent = 'No active visitor QR codes were found.';
+        return;
+      }
+      if (typeof QRCode === 'undefined') {
+        message.textContent = 'QR library did not load. Check internet access and reload this dialog.';
+        return;
+      }
+
+      visitors.forEach(visitor => {
+        const card = document.createElement('article');
+        card.className = 'card';
+
+        const event = document.createElement('div');
+        event.className = 'event';
+        event.textContent = 'Visitor Entry Pass';
+
+        const name = document.createElement('div');
+        name.className = 'name';
+        name.textContent = visitor.name;
+
+        const id = document.createElement('div');
+        id.className = 'id';
+        id.textContent = visitor.visitorId;
+
+        const qr = document.createElement('div');
+        qr.className = 'qr';
+
+        const instruction = document.createElement('div');
+        instruction.className = 'instruction';
+        instruction.textContent = 'Present this QR code at the entry gate';
+
+        card.appendChild(event);
+        card.appendChild(name);
+        card.appendChild(id);
+        card.appendChild(qr);
+        card.appendChild(instruction);
+        container.appendChild(card);
+
+        new QRCode(qr, {
+          text: visitor.qrUrl,
+          width: 128,
+          height: 128,
+          correctLevel: QRCode.CorrectLevel.M
+        });
+      });
+
+      message.textContent = visitors.length + ' visitor QR card(s) loaded. Use Print / Save as PDF.';
+      document.getElementById('printButton').disabled = false;
+    }
+  </script>
+</body>
+</html>
